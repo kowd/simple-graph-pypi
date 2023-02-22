@@ -8,23 +8,26 @@ json-based nodes, and edges with optional json properties,
 using an atomic transaction wrapper function.
 
 """
-
 import sqlite3
 import json
 import pathlib
 from functools import lru_cache
 from jinja2 import Environment, BaseLoader, select_autoescape
+from typing import Any, Callable, Optional, TypeVar
+from pathlib import Path
 
+Json = dict[str, Any]
+Identifier = int|str|None
 
 @lru_cache(maxsize=None)
-def read_sql(sql_file):
+def read_sql(sql_file: str) -> str:
     with open(pathlib.Path(__file__).parent.resolve() / "sql" / sql_file) as f:
         return f.read()
 
 
 class SqlTemplateLoader(BaseLoader):
-    def get_source(self, environment, template):
-        return read_sql(template), template, True
+    def get_source(self, environment: "Environment", template: str) -> tuple[str, Optional[str], Optional[Callable[[], bool]]]:
+        return read_sql(template), template, lambda: True
 
 
 env = Environment(
@@ -37,7 +40,8 @@ search_template = env.get_template('search-node.template')
 traverse_template = env.get_template('traverse.template')
 
 
-def atomic(db_file, cursor_exec_fn):
+T = TypeVar("T")
+def atomic(db_file: Path, cursor_exec_fn: Callable[[sqlite3.Cursor], T]) -> T:
     connection = None
     try:
         connection = sqlite3.connect(db_file)
@@ -51,37 +55,37 @@ def atomic(db_file, cursor_exec_fn):
     return results
 
 
-def initialize(db_file, schema_file='schema.sql'):
-    def _init(cursor):
+def initialize(db_file: Path, schema_file:str='schema.sql') -> None:
+    def _init(cursor: sqlite3.Cursor) -> None:
         cursor.executescript(read_sql(schema_file))
     return atomic(db_file, _init)
 
 
-def _set_id(identifier, data):
+def _set_id(identifier: Identifier, data: Json) -> Json:
     if identifier is not None:
         data["id"] = identifier
     return data
 
 
-def _insert_node(cursor, identifier, data):
+def _insert_node(cursor: sqlite3.Cursor, identifier: Identifier, data: Json) -> None:
     cursor.execute(read_sql('insert-node.sql'),
                    (json.dumps(_set_id(identifier, data)),))
 
 
-def add_node(data, identifier=None):
-    def _add_node(cursor):
+def add_node(data: Json, identifier:Identifier=None) -> Callable[[sqlite3.Cursor], None]:
+    def _add_node(cursor: sqlite3.Cursor) -> None:
         _insert_node(cursor, identifier, data)
     return _add_node
 
 
-def add_nodes(nodes, ids):
-    def _add_nodes(cursor):
+def add_nodes(nodes: list[Json], ids: list[int|str]):
+    def _add_nodes(cursor: sqlite3.Cursor) -> None:
         cursor.executemany(read_sql('insert-node.sql'), [(x,) for x in map(
             lambda node: json.dumps(_set_id(node[0], node[1])), zip(ids, nodes))])
     return _add_nodes
 
 
-def _upsert_node(cursor, identifier, data):
+def _upsert_node(cursor: sqlite3.Cursor, identifier:str|int, data: Json) -> None:
     current_data = find_node(identifier)(cursor)
     if not current_data:
         # no prior record exists, so regular insert
@@ -93,42 +97,42 @@ def _upsert_node(cursor, identifier, data):
             'update-node.sql'), (json.dumps(_set_id(identifier, updated_data)), identifier,))
 
 
-def upsert_node(identifier, data):
-    def _upsert(cursor):
+def upsert_node(identifier: str, data: Json) -> Callable[[sqlite3.Cursor], None]:
+    def _upsert(cursor: sqlite3.Cursor) -> None:
         _upsert_node(cursor, identifier, data)
     return _upsert
 
 
-def upsert_nodes(nodes, ids):
-    def _upsert(cursor):
+def upsert_nodes(nodes: list[Json], ids: list[str|int]) -> Callable[[sqlite3.Cursor], None]:
+    def _upsert(cursor: sqlite3.Cursor) -> None:
         for (id, node) in zip(ids, nodes):
             _upsert_node(cursor, id, node)
     return _upsert
 
 
-def connect_nodes(source_id, target_id, properties={}):
-    def _connect_nodes(cursor):
+def connect_nodes(source_id: Identifier, target_id: Identifier, properties: Json={}) -> Callable[[sqlite3.Cursor], None]:
+    def _connect_nodes(cursor: sqlite3.Cursor):
         cursor.execute(read_sql('insert-edge.sql'),
                        (source_id, target_id, json.dumps(properties),))
     return _connect_nodes
 
 
-def connect_many_nodes(sources, targets, properties):
-    def _connect_nodes(cursor):
+def connect_many_nodes(sources: list[str|int], targets: list[str|int], properties: list[Json]) -> Callable[[sqlite3.Cursor], None]:
+    def _connect_nodes(cursor: sqlite3.Cursor):
         cursor.executemany(read_sql(
             'insert-edge.sql'), [(x[0], x[1], json.dumps(x[2]),) for x in zip(sources, targets, properties)])
     return _connect_nodes
 
 
-def remove_node(identifier):
-    def _remove_node(cursor):
+def remove_node(identifier: str) -> Callable[[sqlite3.Cursor], None]:
+    def _remove_node(cursor: sqlite3.Cursor) -> None:
         cursor.execute(read_sql('delete-edge.sql'), (identifier, identifier,))
         cursor.execute(read_sql('delete-node.sql'), (identifier,))
     return _remove_node
 
 
-def remove_nodes(identifiers):
-    def _remove_node(cursor):
+def remove_nodes(identifiers: list[str|int]) -> Callable[[sqlite3.Cursor], None]:
+    def _remove_node(cursor: sqlite3.Cursor):
         cursor.executemany(read_sql(
             'delete-edge.sql'), [(identifier, identifier,) for identifier in identifiers])
         cursor.executemany(read_sql('delete-node.sql'),
@@ -136,7 +140,7 @@ def remove_nodes(identifiers):
     return _remove_node
 
 
-def _generate_clause(key, predicate=None, joiner=None, tree=False, tree_with_key=False):
+def generate_clause(key:str, predicate:None|str=None, joiner:None|str=None, tree:bool=False, tree_with_key:bool=False) -> str:
     '''Given at minimum a key in the body json, generate a query clause
     which can be bound to a corresponding value at point of execution'''
 
@@ -154,7 +158,7 @@ def _generate_clause(key, predicate=None, joiner=None, tree=False, tree_with_key
     return clause_template.render(and_or=joiner, key=key, predicate=predicate, key_value=True)
 
 
-def _generate_query(where_clauses, result_column=None, key=None, tree=False):
+def _generate_query(where_clauses:list[str], result_column:str|None=None, key:None|str=None, tree:bool=False) -> str:
     '''Generate the search query, selecting either the id or the body,
     adding the json_tree function and optionally the key, as needed'''
 
@@ -170,43 +174,43 @@ def _generate_query(where_clauses, result_column=None, key=None, tree=False):
     return search_template.render(result_column=result_column, search_clauses=where_clauses)
 
 
-def find_node(identifier):
-    def _find_node(cursor):
+def find_node(identifier: str|int) -> Callable[[sqlite3.Cursor], Json]:
+    def _find_node(cursor: sqlite3.Cursor) -> Json:
         query = _generate_query([clause_template.render(id_lookup=True)])
         result = cursor.execute(query, (identifier,)).fetchone()
         return {} if not result else json.loads(result[0])
     return _find_node
 
 
-def _parse_search_results(results, idx=0):
-    print(results)
+def _parse_search_results(results:list[tuple[str, ...]], idx:int=0) -> list[Json]:
     return [json.loads(item[idx]) for item in results]
 
 
-def find_nodes(where_clauses, bindings, tree_query=False, key=None):
-    def _find_nodes(cursor):
+def find_nodes(where_clauses:list[str], bindings:tuple[str, ...], tree_query:bool=False, key:str|None=None):
+    def _find_nodes(cursor:sqlite3.Cursor):
         query = _generate_query(where_clauses, key=key, tree=tree_query)
         return _parse_search_results(cursor.execute(query, bindings).fetchall())
     return _find_nodes
 
 
-def find_neighbors(with_bodies=False):
+def find_neighbors(with_bodies:bool=False) -> str:
     return traverse_template.render(with_bodies=with_bodies, inbound=True, outbound=True)
 
 
-def find_outbound_neighbors(with_bodies=False):
+def find_outbound_neighbors(with_bodies:bool=False) -> str:
     return traverse_template.render(with_bodies=with_bodies, outbound=True)
 
 
-def find_inbound_neighbors(with_bodies=False):
+def find_inbound_neighbors(with_bodies:bool=False) -> str:
     return traverse_template.render(with_bodies=with_bodies, inbound=True)
 
 
-def traverse(db_file, src, tgt=None, neighbors_fn=find_neighbors, with_bodies=False):
-    def _traverse(cursor):
-        path = []
+def traverse(db_file:Path, src:Identifier, tgt:Identifier=None, neighbors_fn:Callable[[bool], str]=find_neighbors, with_bodies:bool=False) -> list[str|tuple[str,str,str]]:
+    def _traverse(cursor: sqlite3.Cursor) -> list[str|tuple[str, str, str]]:
+        path: list[str|tuple[str, str, str]] = []
         target = json.dumps(tgt)
-        for row in cursor.execute(neighbors_fn(with_bodies=with_bodies), (src,)):
+        neighbors_sql:str = neighbors_fn(with_bodies)
+        for row in cursor.execute(neighbors_sql, (src,)):
             if row:
                 if with_bodies:
                     identifier, obj, _ = row
@@ -223,21 +227,21 @@ def traverse(db_file, src, tgt=None, neighbors_fn=find_neighbors, with_bodies=Fa
     return atomic(db_file, _traverse)
 
 
-def connections_in():
+def connections_in() -> str:
     return read_sql('search-edges-inbound.sql')
 
 
-def connections_out():
+def connections_out() -> str:
     return read_sql('search-edges-outbound.sql')
 
 
-def get_connections_one_way(identifier, direction=connections_in):
-    def _get_connections(cursor):
+def get_connections_one_way(identifier: Identifier, direction: Callable[[], str] = connections_in):
+    def _get_connections(cursor: sqlite3.Cursor) -> list[tuple[str, str, str]]:
         return cursor.execute(direction(), (identifier,)).fetchall()
     return _get_connections
 
 
-def get_connections(identifier):
-    def _get_connections(cursor):
+def get_connections(identifier: str|int) -> Callable[[sqlite3.Cursor], list[tuple[str, str, str]]]:
+    def _get_connections(cursor: sqlite3.Cursor) -> list[tuple[str, str, str]]:
         return cursor.execute(read_sql('search-edges.sql'), (identifier, identifier,)).fetchall()
     return _get_connections

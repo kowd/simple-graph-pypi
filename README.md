@@ -101,16 +101,16 @@ The nodes can be searched by their ids:
 Searches can also use combinations of other attributes, both as strict equality, or using `LIKE` in combination with a trailing `%` for "starts with" or `%` at both ends for "contains":
 
 ```
->>> db.atomic(apple, db.find_nodes([db._generate_clause('name', predicate='LIKE')], ('Steve%',)))
+>>> db.atomic(apple, db.find_nodes([db.generate_clause('name', predicate='LIKE')], ('Steve%',)))
 [{'name': 'Steve Wozniak', 'type': ['person', 'engineer', 'founder'], 'id': 2, 'nickname': 'Woz'}, {'name': 'Steve Jobs', 'type': ['person', 'designer', 'founder'], 'id': 3}]
->>> db.atomic(apple, db.find_nodes([db._generate_clause('name', predicate='LIKE'), db._generate_clause('name', predicate='LIKE', joiner='OR')], ('%Woz%', '%Markkula',)))
+>>> db.atomic(apple, db.find_nodes([db.generate_clause('name', predicate='LIKE'), db.generate_clause('name', predicate='LIKE', joiner='OR')], ('%Woz%', '%Markkula',)))
 [{'name': 'Steve Wozniak', 'type': ['person', 'engineer', 'founder'], 'id': 2, 'nickname': 'Woz'}, {'name': 'Mike Markkula', 'type': ['person', 'investor'], 'id': 5}]
 ```
 
 More complex queries to introspect the json body, using the [sqlite json_tree() function](https://www.sqlite.org/json1.html), are also possible, such as this query for every node whose `type` array contains the value `founder`:
 
 ```
->>> db.atomic(apple, db.find_nodes([db._generate_clause('type', tree=True)], ('founder',), tree_query=True, key='type'))
+>>> db.atomic(apple, db.find_nodes([db.generate_clause('type', tree=True)], ('founder',), tree_query=True, key='type'))
 [{'name': 'Steve Wozniak', 'type': ['person', 'engineer', 'founder'], 'id': 2, 'nickname': 'Woz'}, {'name': 'Steve Jobs', 'type': ['person', 'designer', 'founder'], 'id': 3}, {'name': 'Ronald Wayne', 'type': ['person', 'administrator', 'founder'], 'id': 4}]
 ```
 

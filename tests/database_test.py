@@ -1,18 +1,19 @@
 import sqlite3
 import json
 from simple_graph_sqlite import database as db
-from test_common import database_test_file, nodes, edges, apple
+from test_common import database_test_file, nodes, edges, apple, Edges, Nodes, Json # pyright: ignore 
+from pathlib import Path
+from typing import Any
 
-
-def test_initialize(database_test_file, apple):
+def test_initialize(database_test_file:Path, apple: Any):
     assert database_test_file.exists()
     assert database_test_file.stat().st_size == 32768
 
 
-def test_bulk_operations(database_test_file, nodes, edges):
+def test_bulk_operations(database_test_file: Path, nodes: Nodes, edges: Edges):
     db.initialize(database_test_file)
-    ids = []
-    bodies = []
+    ids:list[str|int] = []
+    bodies:list[Json] = []
     for id, body in nodes.items():
         ids.append(id)
         bodies.append(body)
@@ -28,9 +29,9 @@ def test_bulk_operations(database_test_file, nodes, edges):
         assert db.atomic(database_test_file, db.find_node(id)) == node
 
     # bulk connect and confirm
-    sources = []
-    targets = []
-    properties = []
+    sources:list[str|int] = []
+    targets:list[str|int] = []
+    properties:list[Json] = []
     for src, tgts in edges.items():
         for target in tgts:
             tgt, label = target
@@ -48,10 +49,7 @@ def test_bulk_operations(database_test_file, nodes, edges):
                                      for edge in db.atomic(database_test_file, db.get_connections_one_way(src))]]
         for target in tgts:
             tgt, label = target
-            if label:
-                expected = (str(src), str(tgt), label)
-            else:
-                expected = (str(src), str(tgt), {})
+            expected = (str(src), str(tgt), label or {})
             assert expected in actual
 
     # bulk remove and confirm
@@ -60,7 +58,7 @@ def test_bulk_operations(database_test_file, nodes, edges):
         assert db.atomic(database_test_file, db.find_node(id)) == {}
 
 
-def test_exception(database_test_file, apple, nodes):
+def test_exception(database_test_file: Path, apple: Any, nodes: Nodes):
     node_id = 1
     try:
         db.atomic(database_test_file, db.add_node(nodes[node_id], node_id))
@@ -76,13 +74,13 @@ def test_exception(database_test_file, apple, nodes):
         assert False
 
 
-def test_search(database_test_file, apple, nodes):
+def test_search(database_test_file: Path, apple: Any, nodes: Nodes):
     # search by id
     for id, node in nodes.items():
         assert db.atomic(database_test_file, db.find_node(id)) == node
 
     # simple key-value search using 'LIKE'
-    kv_name_like = db._generate_clause('name', predicate='LIKE')
+    kv_name_like = db.generate_clause('name', predicate='LIKE')
     steves = db.atomic(database_test_file,
                        db.find_nodes([kv_name_like],
                                      ('Steve%',)))
@@ -91,7 +89,7 @@ def test_search(database_test_file, apple, nodes):
                                                       'Steve Jobs']
 
     # plus an additional binding on the same key to find a different person
-    kv_other_name = db._generate_clause('name', predicate='LIKE', joiner='OR')
+    kv_other_name = db.generate_clause('name', predicate='LIKE', joiner='OR')
     woz_mike = db.atomic(database_test_file,
                          db.find_nodes([kv_name_like, kv_other_name],
                                        ('%Woz%', '%Markkula',)))
@@ -101,7 +99,7 @@ def test_search(database_test_file, apple, nodes):
 
     # a tree search to find all the people with 'founder' in their 'type' list
     founders = db.atomic(database_test_file,
-                         db.find_nodes([db._generate_clause('type', tree=True)],
+                         db.find_nodes([db.generate_clause('type', tree=True)],
                                        ('founder',),
                                        tree_query=True,
                                        key='type'))
@@ -111,7 +109,7 @@ def test_search(database_test_file, apple, nodes):
                                                         'Ronald Wayne']
 
 
-def test_traversal(database_test_file, apple):
+def test_traversal(database_test_file: Path, apple: Any):
     # the traversal CTE seed type is respected, and appears in the output as-is
     assert db.traverse(database_test_file, 2, 3) == ['2', '1', '3']
     # singly-quoted strings works as expected
@@ -145,8 +143,8 @@ def test_traversal(database_test_file, apple):
         '5', '1', '2', '3', '4']
 
 
-def test_traversal_with_bodies(database_test_file, apple):
-    def _normalize_results(results):
+def test_traversal_with_bodies(database_test_file: Path, apple: Any):
+    def _normalize_results(results:list[str|tuple[str, str, str]]) -> list[tuple[str, str, Json]]:
         return [(x, y, json.loads(z)) for (x, y, z) in results]
 
     assert _normalize_results(db.traverse(database_test_file, 2, 3, with_bodies=True)) == _normalize_results(

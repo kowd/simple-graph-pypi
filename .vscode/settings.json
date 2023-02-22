@@ -1,0 +1,12 @@
+{
+    "python.testing.pytestArgs": [],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.typeCheckingMode": "strict",
+    "files.exclude": {
+        ".pytest_cache": true,
+        ".venv": true,
+        "**/__pycache__": true
+    }
+}
